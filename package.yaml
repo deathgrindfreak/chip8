@@ -1,10 +1,10 @@
 name:                chip8
 version:             0.1.0.0
-github:              "githubuser/chip8"
+github:              "deathgrindfreak/chip8"
 license:             BSD3
-author:              "Author name here"
-maintainer:          "example@example.com"
-copyright:           "2021 Author name here"
+author:              "Cooper Bell"
+maintainer:          "john.cooper.bell@gmail.com"
+copyright:           "2021 Cooper Bell"
 
 extra-source-files:
 - README.md
@@ -17,10 +17,14 @@ extra-source-files:
 # To avoid duplicated efforts in documentation and dealing with the
 # complications of embedding Haddock markup inside cabal files, it is
 # common to point users to the README.md file.
-description:         Please see the README on GitHub at <https://github.com/githubuser/chip8#readme>
+description:         Please see the README on GitHub at <https://github.com/deathgrindfreak/chip8#readme>
 
 dependencies:
 - base >= 4.7 && < 5
+- vector
+- sdl2
+- linear
+- StateVar
 
 library:
   source-dirs: src
@@ -35,8 +39,6 @@ executables:
     - -with-rtsopts=-N
     dependencies:
     - chip8
-    - sdl2
-    - linear
 
 tests:
   chip8-test:
