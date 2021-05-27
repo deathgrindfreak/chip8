@@ -35,16 +35,18 @@ main = do
   initializeAll
   window <- createWindow "Chip 8" chip8Window
   renderer <- createRenderer window (-1) defaultRenderer
-  position <- newIORef (0 :: CInt, R :: Direction)
-  appLoop renderer position
+  program <- loadProgramFromFile "./roms/ibm_logo.ch8"
+  chip <- newIORef (initChip program)
+
+  -- Clear the screen initially
+  rendererDrawColor renderer $= V4 0 0 0 0
+  clear renderer
+
+  appLoop renderer chip
   destroyWindow window
 
--- TODO Nuke
-data Direction = L | R
-type BallPosition = IORef (CInt, Direction)
-
-appLoop :: Renderer -> BallPosition -> IO ()
-appLoop renderer position = do
+appLoop :: Renderer -> IORef Chip -> IO ()
+appLoop renderer chip = do
   events <- pollEvents
   let eventIsQPress event =
         case eventPayload event of
@@ -54,26 +56,17 @@ appLoop renderer position = do
           _ -> False
       qPressed = any eventIsQPress events
 
-  rendererDrawColor renderer $= V4 0 0 0 0
-  clear renderer
-
   rendererDrawColor renderer $= V4 255 255 255 255
-  drawBall renderer position
+  runChipCycle renderer chip
 
   present renderer
-  unless qPressed (appLoop renderer position)
+  unless qPressed (appLoop renderer chip)
 
-
-drawBall :: (MonadIO m) => Renderer -> BallPosition -> m ()
-drawBall renderer position = do
-  position $~ \ps -> case ps of
-    (0, L) -> (1, R)
-    (64, R) -> (63, L)
-    (p, L) -> (p - 1, L)
-    (p, R) -> (p + 1, R)
-
-  (p, _) <- get position
-  drawPixel renderer $ V2 p 10
+runChipCycle :: (MonadIO m) => Renderer -> IORef Chip -> m ()
+runChipCycle renderer chip = do
+  ch <- get chip
+  chip $~ runCycle
+  drawPixels renderer (display ch)
 
 drawPixels :: (MonadIO m) => Renderer -> V.Vector (V2 CInt) -> m ()
 drawPixels renderer pixels = fillRects renderer $ V.map scalePixels pixels

@@ -1,15 +1,14 @@
 module Chip8
   ( displaySize
   , initChip
-  , Chip
+  , Chip(..)
   , Program
-
   , loadProgramFromFile
+  , runCycle
 
-  , memory
-  , index
   , decodeOp
   , displayOp
+  , printDisplay
   )
 where
 
@@ -17,17 +16,24 @@ import Prelude hiding (readFile)
 import System.IO (FilePath)
 import Data.ByteString.Lazy (readFile)
 import Data.Word
-import qualified Data.Vector as V
+import Linear (V2(..))
+import Foreign.C.Types (CInt)
+import qualified Data.Vector.Storable as V
 import Data.Bits
 import qualified Data.Binary as B
 import Data.Binary.Get (isEmpty, getWord8, runGet)
+import Data.List (partition)
+
+import Numeric (showHex)
+import Text.Printf
+import Debug.Trace (trace)
 
 displaySize :: Num a => (a, a)
 displaySize = (64, 32)
 
 data Chip = Chip
   { memory :: V.Vector Int
-  , display :: V.Vector Int
+  , display :: V.Vector (V2 CInt)
   , pc :: Int
   , index :: Int
   , stack :: [Int]
@@ -54,16 +60,16 @@ loadProgramFromFile program = do
           return ((fromIntegral b):bs)
 
 initChip :: Program -> Chip
-initChip program = loadProgram program . setFonts $ Chip
-           { memory = V.replicate 4096 0
-           , display = let (w, h) = displaySize in V.replicate (w * h) 0
-           , pc = 0x200
-           , index = 0
-           , stack = []
-           , delay = 0
-           , sound = 0
-           , registers = V.replicate 15 0
-           }
+initChip program = loadProgram program . setFonts $ ch
+  where ch = Chip { memory = V.replicate 4096 0
+                  , display = V.empty
+                  , pc = 0x200
+                  , index = 0
+                  , stack = []
+                  , delay = 0
+                  , sound = 0
+                  , registers = V.replicate 15 0
+                  }
 
 -- We'll assume programs start at 0x200
 loadProgram :: Program -> Chip -> Chip
@@ -92,21 +98,61 @@ setFonts ch = ch { memory = (memory ch) V.// (zip [0x50..0x9F] fonts) }
             0xF0, 0x80, 0xF0, 0x80, 0x80  -- F
           ]
 
-data DecodedOp a = DecodedOp
-  { nibbles :: [a]
-  , secondByte :: a
-  , trippleNibble :: a
+runCycle :: Chip -> Chip
+runCycle ch = let (ch', op) = fetch ch
+              in execute (decodeOp op) ch'
+
+fetch :: Chip -> (Chip, Int)
+fetch ch = let pcv = (pc ch)
+               firstByte = (memory ch) V.! pcv
+               secondByte = (memory ch) V.! (pcv + 1)
+               nextInstruction = firstByte * (16 ^ 2) + secondByte
+           in (ch { pc = pcv + 2 }, nextInstruction)
+
+data DecodedOp = DecodedOp
+  { nibbles :: [Int]
+  , secondByte :: Int
+  , trippleNibble :: Int
   }
   deriving Show
 
-decodeOp :: (Bits a, Num a) => a -> DecodedOp a
+decodeOp :: Int -> DecodedOp
 decodeOp op = DecodedOp
   { nibbles = [(op `shiftR` (4 * i)) .&. 0x0F | i <- [3,2..0]]
   , secondByte = op .&. 0xFF
   , trippleNibble = op .&. 0xFFF
   }
 
-displayOp :: DecodedOp Int -> Chip -> Chip
+type ExecuteOperation = DecodedOp -> Chip -> Chip
+
+execute :: ExecuteOperation
+execute op ch = let (fst:snd:thd:fth:_) = (nibbles op) in
+  case (fst, snd, thd, fth) of
+    (0x0, 0x0, 0xE, 0x0) -> clearScreen op ch
+    (0x1, _, _, _) -> jump op ch
+    (0x6, _, _, _) -> setRegister op ch
+    (0x7, _, _, _) -> addToRegister op ch
+    (0xA, _, _, _) -> setIndexRegister op ch
+    (0xD, _, _, _) -> displayOp op ch
+
+clearScreen :: ExecuteOperation
+clearScreen op ch = ch { display = V.empty }
+
+jump :: ExecuteOperation
+jump op ch = ch { pc = (trippleNibble op) }
+
+setRegister :: ExecuteOperation
+setRegister op ch = ch { registers = (registers ch) V.// [((nibbles op) !! 1, secondByte op)] }
+
+addToRegister :: ExecuteOperation
+addToRegister op ch = let address = (nibbles op) !! 1
+                          newValue = secondByte op + (registers ch) V.! address
+                      in ch { registers = (registers ch) V.// [(address, newValue)] }
+
+setIndexRegister :: ExecuteOperation
+setIndexRegister op ch = ch { index = (trippleNibble op) }
+
+displayOp :: ExecuteOperation
 displayOp op ch = ch { display = updatedDisplay
                      , registers = if setVF
                                    then (registers ch) V.// [(0xF - 1, 1)]
@@ -118,18 +164,22 @@ displayOp op ch = ch { display = updatedDisplay
     (updatedDisplay, setVF) = let (_:vx:vy:n:_) = nibbles op
                                   x = ((registers ch) V.! vx) `mod` w
                                   y = ((registers ch) V.! vy) `mod` h
-                                  flattenedCoords =
-                                    [flattenCoords (x + xi) (y + yi) | xi <- [0..7]
-                                                                     , yi <- [0..(n-1)]
-                                                                     , ((memory ch) V.! ((index ch) + yi)) `testBit` (7 - xi)
-                                                                     , x + xi < w
-                                                                     , y + yi < h]
-                                  updatedPixelCoords = map determinePixel flattenedCoords
-                              in ((display ch) V.// updatedPixelCoords, any ((== 0) . snd) updatedPixelCoords)
+                                  coords = [toCIntV2 (x + xi) (y + yi) | xi <- [0..7]
+                                                                       , yi <- [0..(n-1)]
+                                                                       , ((memory ch) V.! ((index ch) + yi)) `testBit` (7 - xi)
+                                                                       , x + xi < w
+                                                                       , y + yi < h
+                                                                       ]
+                                  (flippedCoords, updatedPixelCoords) = partition (flip V.elem (display ch)) coords
+                              in (V.fromList updatedPixelCoords, length flippedCoords > 0)
 
-    -- Pixels are only set if current display pixel is empty.
-    -- If a pixel is set where the pixel in the sprite is to be set, it is unset
-    determinePixel pixelCoord = (pixelCoord, if (display ch) V.! pixelCoord == 0 then 1 else 0)
+    toCIntV2 x y = V2 (fromIntegral x) (fromIntegral y)
 
-    -- Map 2D coords to a 1D vector index
-    flattenCoords x y = w * y + x + (if y == 0 then 0 else 1)
+printDisplay :: Chip -> IO ()
+printDisplay ch = mapM_ putStrLn (chunk (fst displaySize) . toLines . display $ ch)
+  where
+    toLines display = V.foldr (\d a -> (if d == 0 then '.' else '#') : a) [] display
+
+    chunk :: Int -> [a] -> [[a]]
+    chunk _ [] = []
+    chunk n xs = (take n xs) : (chunk n (drop n xs))
