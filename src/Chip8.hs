@@ -123,29 +123,67 @@ decodeOp op = DecodedOp
   , trippleNibble = op .&. 0xFFF
   }
 
+secondNibble :: DecodedOp -> Int
+secondNibble op = (nibbles op) !! 1
+
+thirdNibble :: DecodedOp -> Int
+thirdNibble op = (nibbles op) !! 2
+
 type ExecuteOperation = DecodedOp -> Chip -> Chip
 
 execute :: ExecuteOperation
 execute op ch = let (fst:snd:thd:fth:_) = (nibbles op) in
   case (fst, snd, thd, fth) of
     (0x0, 0x0, 0xE, 0x0) -> clearScreen op ch
+    (0x0, 0x0, 0xE, 0xE) -> returnFromCall op ch
     (0x1, _, _, _) -> jump op ch
+    (0x2, _, _, _) -> callRoutine op ch
+    (0x3, _, _, _) -> conditionalSkip op ch
+    (0x4, _, _, _) -> negConditionalSkip op ch
+    (0x5, _, _, 0x0) -> registerSkip op ch
     (0x6, _, _, _) -> setRegister op ch
     (0x7, _, _, _) -> addToRegister op ch
+    (0x9, _, _, 0x0) -> negRegisterSkip op ch
     (0xA, _, _, _) -> setIndexRegister op ch
     (0xD, _, _, _) -> displayOp op ch
 
 clearScreen :: ExecuteOperation
 clearScreen op ch = ch { display = V.empty }
 
+returnFromCall :: ExecuteOperation
+returnFromCall op ch = let (returnPC:rsStack) = (stack ch)
+                       in ch { stack = rsStack, pc = returnPC}
+
 jump :: ExecuteOperation
 jump op ch = ch { pc = (trippleNibble op) }
 
+callRoutine :: ExecuteOperation
+callRoutine op ch = ch { pc = (trippleNibble op)
+                       , stack = (pc ch) : (stack ch)
+                       }
+
+skipOp :: (Chip -> Bool) -> Chip -> Chip
+skipOp cond ch = if cond ch then ch { pc = (pc ch) + 2 } else ch
+
+conditionalSkip :: ExecuteOperation
+conditionalSkip op = skipOp $ \ch -> ((registers ch) V.! (secondNibble op)) == (secondByte op)
+
+negConditionalSkip :: ExecuteOperation
+negConditionalSkip op = skipOp $ \ch -> ((registers ch) V.! (secondNibble op)) /= (secondByte op)
+
+registerSkip :: ExecuteOperation
+registerSkip op = skipOp $ \ch ->
+  ((registers ch) V.! (secondNibble op)) == ((registers ch) V.! (thirdNibble op))
+
+negRegisterSkip :: ExecuteOperation
+negRegisterSkip op = skipOp $ \ch->
+  ((registers ch) V.! (secondNibble op)) /= ((registers ch) V.! (thirdNibble op))
+
 setRegister :: ExecuteOperation
-setRegister op ch = ch { registers = (registers ch) V.// [((nibbles op) !! 1, secondByte op)] }
+setRegister op ch = ch { registers = (registers ch) V.// [(secondNibble op, secondByte op)] }
 
 addToRegister :: ExecuteOperation
-addToRegister op ch = let address = (nibbles op) !! 1
+addToRegister op ch = let address = secondNibble op
                           newValue = secondByte op + (registers ch) V.! address
                       in ch { registers = (registers ch) V.// [(address, newValue)] }
 
