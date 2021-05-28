@@ -134,7 +134,7 @@ type ExecuteOperation = DecodedOp -> Chip -> Chip
 
 execute :: ExecuteOperation
 execute op ch =
-  case (nibbles op) of
+  case nibbles op of
     (0x0, 0x0, 0xE, 0x0) -> clearScreen op ch
     (0x0, 0x0, 0xE, 0xE) -> returnFromCall op ch
     (0x1, _, _, _) -> jump op ch
@@ -144,6 +144,13 @@ execute op ch =
     (0x5, _, _, 0x0) -> registerSkip op ch
     (0x6, _, _, _) -> setRegister op ch
     (0x7, _, _, _) -> addToRegister op ch
+    (0x8, _, _, 0x0) -> registerOp Nothing (const id) op ch
+    (0x8, _, _, 0x1) -> registerOp Nothing (.|.) op ch
+    (0x8, _, _, 0x2) -> registerOp Nothing (.&.) op ch
+    (0x8, _, _, 0x3) -> registerOp Nothing xor op ch
+    (0x8, _, _, 0x4) -> registerOp (Just $ \r -> if r > 255 then 1 else 0) (+) op ch
+    (0x8, _, _, 0x5) -> registerOp (Just $ \r -> if r > 0 then 1 else 0) (-) op ch
+    (0x8, _, _, 0x7) -> registerOp (Just $ \r -> if r > 0 then 1 else 0) (flip (-)) op ch
     (0x9, _, _, 0x0) -> negRegisterSkip op ch
     (0xA, _, _, _) -> setIndexRegister op ch
     (0xD, _, _, _) -> displayOp op ch
@@ -187,6 +194,17 @@ addToRegister :: ExecuteOperation
 addToRegister op ch = let address = secondNibble op
                           newValue = secondByte op + registers ch V.! address
                       in ch { registers = registers ch V.// [(address, newValue)] }
+
+registerOp :: Maybe (Int -> Int) -> (Int -> Int -> Int) -> ExecuteOperation
+registerOp overflow f op ch =
+  let vx = registers ch V.! secondNibble op
+      vy = registers ch V.! thirdNibble op
+      result = f vx vy
+      registerValues = case overflow of
+                         Just setOverflow -> [(secondNibble op, result `mod` 255),
+                                              (0xF - 1, setOverflow result)]
+                         Nothing -> [(secondNibble op, result)]
+  in ch { registers = registers ch V.// registerValues }
 
 setIndexRegister :: ExecuteOperation
 setIndexRegister op ch = ch { index = trippleNibble op }
