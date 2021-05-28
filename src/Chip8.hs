@@ -22,7 +22,7 @@ import qualified Data.Vector.Storable as V
 import Data.Bits
 import qualified Data.Binary as B
 import Data.Binary.Get (isEmpty, getWord8, runGet)
-import Data.List (partition)
+import Data.List (partition, (\\), union, intersect)
 
 import Numeric (showHex)
 import Text.Printf
@@ -170,8 +170,12 @@ displayOp op ch = ch { display = updatedDisplay
                                                                        , x + xi < w
                                                                        , y + yi < h
                                                                        ]
-                                  (flippedCoords, updatedPixelCoords) = partition (flip V.elem (display ch)) coords
-                              in (V.fromList updatedPixelCoords, length flippedCoords > 0)
+
+                                  -- We want the xor'd list of coordinates, or basically the union - intersection
+                                  displayList = V.toList (display ch)
+                                  intersection = coords `intersect` displayList
+                                  xordPixels = V.fromList $ (coords `union` displayList) \\ intersection
+                              in (xordPixels, length intersection > 0)
 
     toCIntV2 x y = V2 (fromIntegral x) (fromIntegral y)
 
