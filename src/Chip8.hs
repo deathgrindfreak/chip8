@@ -2,13 +2,13 @@ module Chip8
   ( displaySize
   , initChip
   , Chip(..)
+  , ChipDisplay(..)
   , Program
   , loadProgramFromFile
   , runCycle
 
   , decodeOp
   , displayOp
-  , printDisplay
   )
 where
 
@@ -31,9 +31,12 @@ import Debug.Trace (trace)
 displaySize :: Num a => (a, a)
 displaySize = (64, 32)
 
+data ChipDisplay = ChipDisplay (V.Vector (V2 CInt)) (V.Vector (V2 CInt))
+  deriving Show
+
 data Chip = Chip
   { memory :: V.Vector Int
-  , display :: V.Vector (V2 CInt)
+  , display :: ChipDisplay
   , pc :: Int
   , index :: Int
   , stack :: [Int]
@@ -62,7 +65,7 @@ loadProgramFromFile program = do
 initChip :: Program -> Chip
 initChip program = loadProgram program . setFonts $ ch
   where ch = Chip { memory = V.replicate 4096 0
-                  , display = V.empty
+                  , display = ChipDisplay V.empty V.empty
                   , pc = 0x200
                   , index = 0
                   , stack = []
@@ -98,9 +101,9 @@ setFonts ch = ch { memory = memory ch V.// zip [0x50..0x9F] fonts }
             0xF0, 0x80, 0xF0, 0x80, 0x80  -- F
           ]
 
-runCycle :: Chip -> Chip
-runCycle ch = let (ch', op) = fetch ch
-              in execute (decodeOp op) ch'
+runCycle :: [Int] -> Chip -> Chip
+runCycle keys ch = let (ch', op) = fetch ch
+                   in execute keys (decodeOp op) ch'
 
 fetch :: Chip -> (Chip, Int)
 fetch ch = let pcv = pc ch
@@ -132,12 +135,13 @@ thirdNibble DecodedOp { nibbles = (_, _, t, _) } = t
 
 type ExecuteOperation = DecodedOp -> Chip -> Chip
 
-execute :: ExecuteOperation
-execute op ch =
+execute :: [Int] -> ExecuteOperation
+execute keys op ch =
   case nibbles op of
-    (0x0, 0x0, 0xE, 0x0) -> clearScreen op ch
+    (0x0, 0x0, 0xE, 0x0) -> ch { display = ChipDisplay V.empty V.empty }
     (0x0, 0x0, 0xE, 0xE) -> returnFromCall op ch
-    (0x1, _, _, _) -> jump op ch
+    (0x0, _, _, _) -> ch -- ignore
+    (0x1, _, _, _) -> ch { pc = trippleNibble op }
     (0x2, _, _, _) -> callRoutine op ch
     (0x3, _, _, _) -> conditionalSkip op ch
     (0x4, _, _, _) -> negConditionalSkip op ch
@@ -148,22 +152,31 @@ execute op ch =
     (0x8, _, _, 0x1) -> registerOp Nothing (.|.) op ch
     (0x8, _, _, 0x2) -> registerOp Nothing (.&.) op ch
     (0x8, _, _, 0x3) -> registerOp Nothing xor op ch
-    (0x8, _, _, 0x4) -> registerOp (Just $ \r -> if r > 255 then 1 else 0) (+) op ch
-    (0x8, _, _, 0x5) -> registerOp (Just $ \r -> if r > 0 then 1 else 0) (-) op ch
-    (0x8, _, _, 0x7) -> registerOp (Just $ \r -> if r > 0 then 1 else 0) (flip (-)) op ch
+    (0x8, _, _, 0x4) -> registerOp (Just $ \r _ _ -> r > 255) (+) op ch
+    (0x8, _, _, 0x5) -> registerOp (Just $ \r _ _ -> r > 0) (-) op ch
+    (0x8, _, _, 0x6) -> registerOp (Just $ \_ x _ -> x `testBit` 0) (\vx _ -> vx `shiftR` 1) op ch
+    (0x8, _, _, 0x7) -> registerOp (Just $ \r _ _ -> r > 0) (flip (-)) op ch
+    (0x8, _, _, 0xE) -> registerOp (Just $ \_ x _ -> x `testBit` 7) (\vx _ -> vx `shiftL` 1) op ch
     (0x9, _, _, 0x0) -> negRegisterSkip op ch
     (0xA, _, _, _) -> setIndexRegister op ch
+    (0xB, _, _, _) -> ch { pc = trippleNibble op + (registers ch V.! 0) }
+    (0xC, _, _, _) -> undefined
     (0xD, _, _, _) -> displayOp op ch
-
-clearScreen :: ExecuteOperation
-clearScreen _ ch = ch { display = V.empty }
+    (0xE, _, 0x9, 0xE) -> ch { pc = pc ch + (if secondByte op `elem` keys then 2 else 0) }
+    (0xE, _, 0xA, 0x1) -> ch { pc = pc ch + (if secondByte op `notElem` keys then 2 else 0) }
+    (0xF, _, 0x0, 0x7) -> undefined
+    (0xF, _, 0x0, 0xA) -> undefined
+    (0xF, _, 0x1, 0x5) -> undefined
+    (0xF, _, 0x1, 0x8) -> undefined
+    (0xF, _, 0x1, 0xE) -> undefined
+    (0xF, _, 0x2, 0x9) -> undefined
+    (0xF, _, 0x3, 0x3) -> undefined
+    (0xF, _, 0x5, 0x5) -> undefined
+    (0xF, _, 0x6, 0x5) -> undefined
 
 returnFromCall :: ExecuteOperation
 returnFromCall _ ch = let (returnPC:rsStack) = stack ch
                       in ch { stack = rsStack, pc = returnPC}
-
-jump :: ExecuteOperation
-jump op ch = ch { pc = trippleNibble op }
 
 callRoutine :: ExecuteOperation
 callRoutine op ch = ch { pc = trippleNibble op
@@ -195,14 +208,14 @@ addToRegister op ch = let address = secondNibble op
                           newValue = secondByte op + registers ch V.! address
                       in ch { registers = registers ch V.// [(address, newValue)] }
 
-registerOp :: Maybe (Int -> Int) -> (Int -> Int -> Int) -> ExecuteOperation
+registerOp :: Maybe (Int -> Int -> Int -> Bool) -> (Int -> Int -> Int) -> ExecuteOperation
 registerOp overflow f op ch =
   let vx = registers ch V.! secondNibble op
       vy = registers ch V.! thirdNibble op
       result = f vx vy
       registerValues = case overflow of
                          Just setOverflow -> [(secondNibble op, result `mod` 255),
-                                              (0xF - 1, setOverflow result)]
+                                              (0xF - 1, if setOverflow result vx vy then 1 else 0)]
                          Nothing -> [(secondNibble op, result)]
   in ch { registers = registers ch V.// registerValues }
 
@@ -229,18 +242,19 @@ displayOp op ch = ch { display = updatedDisplay
                                                                        ]
 
                                   -- We want the xor'd list of coordinates, or basically the union - intersection
-                                  displayList = V.toList (display ch)
+                                  ChipDisplay onPixels _ = display ch
+                                  displayList = V.toList onPixels
                                   intersection = coords `intersect` displayList
                                   xordPixels = V.fromList $ (coords `union` displayList) \\ intersection
-                              in (xordPixels, null intersection)
+                              in (ChipDisplay xordPixels (V.fromList intersection), null intersection)
 
     toCIntV2 x y = V2 (fromIntegral x) (fromIntegral y)
 
-printDisplay :: Chip -> IO ()
-printDisplay ch = mapM_ putStrLn (chunk (fst displaySize) . toLines . display $ ch)
-  where
-    toLines = V.foldr (\d a -> (if d == 0 then '.' else '#') : a) []
+-- printChipDisplay :: Chip -> IO ()
+-- printChipDisplay ch = mapM_ putStrLn (chunk (fst displaySize) . toLines . display $ ch)
+--   where
+--     toLines = V.foldr (\d a -> (if d == 0 then '.' else '#') : a) []
 
-    chunk :: Int -> [a] -> [[a]]
-    chunk _ [] = []
-    chunk n xs = take n xs : chunk n (drop n xs)
+--     chunk :: Int -> [a] -> [[a]]
+--     chunk _ [] = []
+--     chunk n xs = take n xs : chunk n (drop n xs)

@@ -11,6 +11,8 @@ import Control.Monad.IO.Class (MonadIO)
 import qualified Data.Vector.Storable as V
 import Data.StateVar
 import Data.IORef
+import qualified Data.List as L
+import Debug.Trace
 
 pixelSize :: CInt
 pixelSize = 15
@@ -18,6 +20,26 @@ pixelSize = 15
 getWindowSize :: (CInt, CInt) -> V2 CInt
 getWindowSize (w, h) = V2 (w * pixelSize) (h * pixelSize)
 
+scanCodes :: [Scancode]
+scanCodes = [ Scancode1
+            , Scancode2
+            , Scancode3
+            , Scancode4
+            , ScancodeQ
+            , ScancodeW
+            , ScancodeE
+            , ScancodeR
+            , ScancodeA
+            , ScancodeS
+            , ScancodeD
+            , ScancodeF
+            , ScancodeZ
+            , ScancodeX
+            , ScancodeC
+            , ScancodeV
+            ]
+
+chip8Window :: WindowConfig
 chip8Window = WindowConfig
   { windowBorder = True
   , windowHighDPI = False
@@ -35,6 +57,7 @@ main = do
   initializeAll
   window <- createWindow "Chip 8" chip8Window
   renderer <- createRenderer window (-1) defaultRenderer
+  -- program <- loadProgramFromFile "./roms/test_opcode.ch8"
   program <- loadProgramFromFile "./roms/ibm_logo.ch8"
   chip <- newIORef (initChip program)
 
@@ -48,25 +71,38 @@ main = do
 appLoop :: Renderer -> IORef Chip -> IO ()
 appLoop renderer chip = do
   events <- pollEvents
-  let eventIsQPress event =
-        case eventPayload event of
-          KeyboardEvent keyboardEvent ->
-            keyboardEventKeyMotion keyboardEvent == Pressed &&
-            keysymKeycode (keyboardEventKeysym keyboardEvent) == KeycodeQ
-          _ -> False
-      qPressed = any eventIsQPress events
+  let chipKeys = filterChipKeys events
 
-  rendererDrawColor renderer $= V4 255 255 255 255
-  runChipCycle renderer chip
+  runChipCycle renderer chip chipKeys
 
   present renderer
-  unless qPressed (appLoop renderer chip)
+  appLoop renderer chip
 
-runChipCycle :: (MonadIO m) => Renderer -> IORef Chip -> m ()
-runChipCycle renderer chip = do
-  ch <- get chip
-  chip $~ runCycle
-  drawPixels renderer (display ch)
+filterChipKeys :: [Event] -> [Int]
+filterChipKeys = foldr findChipKey []
+  where
+    getScanCode event =
+      case eventPayload event of
+        KeyboardEvent keyboardEvent ->
+          if keyboardEventKeyMotion keyboardEvent == Pressed
+          then Just $ keysymScancode (keyboardEventKeysym keyboardEvent)
+          else Nothing
+        _ -> Nothing
+
+    findChipKey event keys =
+      maybe keys (:keys) (getScanCode event >>= (`L.elemIndex` scanCodes))
+
+runChipCycle :: (MonadIO m) => Renderer -> IORef Chip -> [Int] -> m ()
+runChipCycle renderer chip chipKeys = do
+  chip $~ runCycle chipKeys
+
+  Chip { display = ChipDisplay on off } <- get chip
+
+  rendererDrawColor renderer $= V4 0 0 0 0
+  drawPixels renderer off
+
+  rendererDrawColor renderer $= V4 255 255 255 255
+  drawPixels renderer on
 
 drawPixels :: (MonadIO m) => Renderer -> V.Vector (V2 CInt) -> m ()
 drawPixels renderer pixels = fillRects renderer $ V.map scalePixels pixels
