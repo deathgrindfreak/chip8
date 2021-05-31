@@ -165,7 +165,7 @@ execute keys op ch =
     (0xE, _, 0x9, 0xE) -> ch { pc = pc ch + (if secondByte op `elem` keys then 2 else 0) }
     (0xE, _, 0xA, 0x1) -> ch { pc = pc ch + (if secondByte op `notElem` keys then 2 else 0) }
     (0xF, _, 0x0, 0x7) -> undefined
-    (0xF, _, 0x0, 0xA) -> undefined
+    (0xF, _, 0x0, 0xA) -> waitForKeyPress keys op ch
     (0xF, _, 0x1, 0x5) -> undefined
     (0xF, _, 0x1, 0x8) -> undefined
     (0xF, _, 0x1, 0xE) -> undefined
@@ -249,6 +249,12 @@ displayOp op ch = ch { display = updatedDisplay
                               in (ChipDisplay xordPixels (V.fromList intersection), null intersection)
 
     toCIntV2 x y = V2 (fromIntegral x) (fromIntegral y)
+
+waitForKeyPress :: [Int] -> ExecuteOperation
+waitForKeyPress keys op ch =
+  if null keys
+  then ch { pc = pc ch - 2 } -- Reset PC so that we loop at the same instruction
+  else ch { registers = registers ch V.// [(secondByte op, head keys)] }
 
 -- printChipDisplay :: Chip -> IO ()
 -- printChipDisplay ch = mapM_ putStrLn (chunk (fst displaySize) . toLines . display $ ch)
