@@ -24,6 +24,7 @@ import Data.Bits
 import qualified Data.Binary as B
 import Data.Binary.Get (isEmpty, getWord8, runGet)
 import Data.List (partition, (\\), union, intersect)
+import System.Random (StdGen, randomR)
 
 import Numeric (showHex)
 import Text.Printf
@@ -44,6 +45,7 @@ data Chip = Chip
   , delay :: Int
   , sound :: Int
   , registers :: V.Vector Int
+  , gen :: StdGen
   }
   deriving Show
 
@@ -63,8 +65,8 @@ loadProgramFromFile program = do
           bs <- readBytes
           return (fromIntegral b:bs)
 
-initChip :: Program -> Chip
-initChip program = loadProgram program . setFonts $ ch
+initChip :: Program -> StdGen -> Chip
+initChip program g = loadProgram program . setFonts $ ch
   where ch = Chip { memory = V.replicate 4096 0
                   , display = ChipDisplay V.empty V.empty
                   , pc = 0x200
@@ -73,6 +75,7 @@ initChip program = loadProgram program . setFonts $ ch
                   , delay = 0
                   , sound = 0
                   , registers = V.replicate 16 0
+                  , gen = g
                   }
 
 -- We'll assume programs start at 0x200
@@ -183,7 +186,9 @@ execute ChipExtData { keys = ks } op ch =
     (0x9, _, _, 0x0) -> negRegisterSkip op ch
     (0xA, _, _, _) -> ch { index = trippleNibble op }
     (0xB, _, _, _) -> ch { pc = trippleNibble op + (registers ch V.! 0) }
-    (0xC, _, _, _) -> undefined
+    (0xC, _, _, _) -> let (n, g') = randomR (0, 255) (gen ch)
+                      in ch { gen = g'
+                            , registers = registers ch V.// [(secondNibble op, secondByte op .&. n)]}
     (0xD, _, _, _) -> displayOp op ch
     (0xE, _, 0x9, 0xE) -> ch { pc = pc ch + if secondByte op `elem` ks then 2 else 0 }
     (0xE, _, 0xA, 0x1) -> ch { pc = pc ch + if secondByte op `notElem` ks then 2 else 0 }
@@ -192,8 +197,8 @@ execute ChipExtData { keys = ks } op ch =
     (0xF, _, 0x1, 0x5) -> ch { delay = registers ch V.! secondNibble op }
     (0xF, _, 0x1, 0x8) -> ch { sound = registers ch V.! secondNibble op }
     (0xF, _, 0x1, 0xE) -> ch { index = index ch + registers ch V.! secondNibble op }
-    (0xF, _, 0x2, 0x9) -> undefined
-    (0xF, _, 0x3, 0x3) -> undefined
+    (0xF, _, 0x2, 0x9) -> ch -- TODO
+    (0xF, _, 0x3, 0x3) -> ch -- TODO
     (0xF, _, 0x5, 0x5) -> ch { memory = memory ch V.// map (\v -> (index ch + v, registers ch V.! v)) [0x0..(secondNibble op)]}
     (0xF, _, 0x6, 0x5) -> ch { registers = registers ch V.// map (\v -> (v, memory ch V.! index ch + v)) [0x0..(secondNibble op)]}
 
@@ -217,7 +222,7 @@ negRegisterSkip op = skipOp $ \ch->
 addToRegister :: ExecuteOperation
 addToRegister op ch = let address = secondNibble op
                           newValue = secondByte op + registers ch V.! address
-                      in ch { registers = registers ch V.// [(address, newValue)] }
+                      in ch { registers = registers ch V.// [(address, newValue `mod` 256)] }
 
 registerOp :: Maybe (Int -> Int -> Int -> Bool) -> (Int -> Int -> Int) -> ExecuteOperation
 registerOp overflow f op ch =
@@ -226,7 +231,7 @@ registerOp overflow f op ch =
       result = f vx vy
       registerValues =
         case overflow of
-          Just setOverflow -> [(secondNibble op, result `mod` 255),
+          Just setOverflow -> [(secondNibble op, result `mod` 256),
                                 (0xF, if setOverflow result vx vy then 1 else 0)]
           Nothing -> [(secondNibble op, result)]
   in ch { registers = registers ch V.// registerValues }
@@ -263,4 +268,4 @@ waitForKeyPress :: [Int] -> ExecuteOperation
 waitForKeyPress ks op ch =
   if null ks
   then ch { pc = pc ch - 2 } -- Reset PC so that we loop at the same instruction
-  else ch { registers = registers ch V.// [(secondByte op, head keys)] }
+  else ch { registers = registers ch V.// [(secondByte op, head ks)] }

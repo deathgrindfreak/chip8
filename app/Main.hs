@@ -14,6 +14,7 @@ import Data.IORef
 import qualified Data.List as L
 import Debug.Trace
 import System.Environment (getArgs)
+import System.Random (getStdGen)
 
 -- This size of a Chip8 "pixel" in ordinary screen pixels
 pixelSize :: CInt
@@ -63,7 +64,8 @@ main = do
   window <- createWindow "Chip 8" chip8Window
   renderer <- createRenderer window (-1) defaultRenderer
   program <- loadProgramFromFile fileName
-  chip <- newIORef (initChip program)
+  g <- getStdGen
+  chip <- newIORef (initChip program g)
 
   -- Clear the screen initially
   rendererDrawColor renderer $= V4 0 0 0 0

@@ -27,6 +27,7 @@ dependencies:
 - StateVar
 - binary
 - bytestring
+- random
 
 library:
   source-dirs: src
