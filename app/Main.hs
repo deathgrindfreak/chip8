@@ -13,13 +13,16 @@ import Data.StateVar
 import Data.IORef
 import qualified Data.List as L
 import Debug.Trace
+import System.Environment (getArgs)
 
+-- This size of a Chip8 "pixel" in ordinary screen pixels
 pixelSize :: CInt
 pixelSize = 15
 
 getWindowSize :: (CInt, CInt) -> V2 CInt
 getWindowSize (w, h) = V2 (w * pixelSize) (h * pixelSize)
 
+-- Scan codes for the Chip8 "keyboard"
 scanCodes :: [Scancode]
 scanCodes = [ Scancode1
             , Scancode2
@@ -54,11 +57,12 @@ chip8Window = WindowConfig
 
 main :: IO ()
 main = do
+  -- TODO Proper error handling for missing file
+  (fileName:_) <- getArgs
   initializeAll
   window <- createWindow "Chip 8" chip8Window
   renderer <- createRenderer window (-1) defaultRenderer
-  -- program <- loadProgramFromFile "./roms/test_opcode.ch8"
-  program <- loadProgramFromFile "./roms/ibm_logo.ch8"
+  program <- loadProgramFromFile fileName
   chip <- newIORef (initChip program)
 
   -- Clear the screen initially
@@ -70,10 +74,11 @@ main = do
 
 appLoop :: Renderer -> IORef Chip -> IO ()
 appLoop renderer chip = do
+  t <- ticks
   events <- pollEvents
   let chipKeys = filterChipKeys events
 
-  runChipCycle renderer chip chipKeys
+  runChipCycle renderer chip (ChipExtData { keys = chipKeys, millis = fromIntegral t })
 
   present renderer
   appLoop renderer chip
@@ -89,12 +94,12 @@ filterChipKeys = foldr findChipKey []
           else Nothing
         _ -> Nothing
 
-    findChipKey event keys =
-      maybe keys (:keys) (getScanCode event >>= (`L.elemIndex` scanCodes))
+    findChipKey event ks =
+      maybe ks (:ks) (getScanCode event >>= (`L.elemIndex` scanCodes))
 
-runChipCycle :: (MonadIO m) => Renderer -> IORef Chip -> [Int] -> m ()
-runChipCycle renderer chip chipKeys = do
-  chip $~ runCycle chipKeys
+runChipCycle :: (MonadIO m) => Renderer -> IORef Chip -> ChipExtData -> m ()
+runChipCycle renderer chip extData = do
+  chip $~ runCycle extData
 
   Chip { display = ChipDisplay on off } <- get chip
 
