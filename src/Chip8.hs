@@ -197,7 +197,7 @@ execute ChipExtData { keys = ks } op ch =
     (0xF, _, 0x1, 0x5) -> ch { delay = registers ch V.! secondNibble op }
     (0xF, _, 0x1, 0x8) -> ch { sound = registers ch V.! secondNibble op }
     (0xF, _, 0x1, 0xE) -> ch { index = index ch + registers ch V.! secondNibble op }
-    (0xF, _, 0x2, 0x9) -> ch -- TODO
+    (0xF, _, 0x2, 0x9) -> ch { index = 0x50 + 5 * (registers ch V.! secondNibble op) }
     (0xF, _, 0x3, 0x3) -> ch -- TODO
     (0xF, _, 0x5, 0x5) -> ch { memory = memory ch V.// map (\v -> (index ch + v, registers ch V.! v)) [0x0..(secondNibble op)]}
     (0xF, _, 0x6, 0x5) -> ch { registers = registers ch V.// map (\v -> (v, memory ch V.! index ch + v)) [0x0..(secondNibble op)]}
