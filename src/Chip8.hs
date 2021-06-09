@@ -173,7 +173,9 @@ execute ChipExtData { keys = ks } op ch =
     (0x4, _, _, _) -> negConditionalSkip op ch
     (0x5, _, _, 0x0) -> registerSkip op ch
     (0x6, _, _, _) -> ch { registers = registers ch V.// [(secondNibble op, secondByte op)] }
-    (0x7, _, _, _) -> addToRegister op ch
+    (0x7, _, _, _) -> let address = secondNibble op
+                          newValue = secondByte op + registers ch V.! address
+                      in ch { registers = registers ch V.// [(address, newValue `mod` 256)] }
     (0x8, _, _, 0x0) -> registerOp Nothing (const id) op ch
     (0x8, _, _, 0x1) -> registerOp Nothing (.|.) op ch
     (0x8, _, _, 0x2) -> registerOp Nothing (.&.) op ch
@@ -198,9 +200,11 @@ execute ChipExtData { keys = ks } op ch =
     (0xF, _, 0x1, 0x8) -> ch { sound = registers ch V.! secondNibble op }
     (0xF, _, 0x1, 0xE) -> ch { index = index ch + registers ch V.! secondNibble op }
     (0xF, _, 0x2, 0x9) -> ch { index = 0x50 + 5 * (registers ch V.! secondNibble op) }
-    (0xF, _, 0x3, 0x3) -> ch -- TODO
-    (0xF, _, 0x5, 0x5) -> ch { memory = memory ch V.// map (\v -> (index ch + v, registers ch V.! v)) [0x0..(secondNibble op)]}
-    (0xF, _, 0x6, 0x5) -> ch { registers = registers ch V.// map (\v -> (v, memory ch V.! index ch + v)) [0x0..(secondNibble op)]}
+    (0xF, _, 0x3, 0x3) -> setBCD op ch
+    (0xF, _, 0x5, 0x5) -> ch { index = index ch + secondNibble op + 1
+                             , memory = memory ch V.// map (\v -> (index ch + v, registers ch V.! v)) [0x0..(secondNibble op)]}
+    (0xF, _, 0x6, 0x5) -> ch { index = index ch + secondNibble op + 1
+                             , registers = registers ch V.// map (\v -> (v, memory ch V.! (index ch + v))) [0x0..(secondNibble op)]}
 
 skipOp :: (Chip -> Bool) -> Chip -> Chip
 skipOp cond ch = if cond ch then ch { pc = pc ch + 2 } else ch
@@ -219,11 +223,6 @@ negRegisterSkip :: ExecuteOperation
 negRegisterSkip op = skipOp $ \ch->
   (registers ch V.! secondNibble op) /= (registers ch V.! thirdNibble op)
 
-addToRegister :: ExecuteOperation
-addToRegister op ch = let address = secondNibble op
-                          newValue = secondByte op + registers ch V.! address
-                      in ch { registers = registers ch V.// [(address, newValue `mod` 256)] }
-
 registerOp :: Maybe (Int -> Int -> Int -> Bool) -> (Int -> Int -> Int) -> ExecuteOperation
 registerOp overflow f op ch =
   let vx = registers ch V.! secondNibble op
@@ -235,6 +234,11 @@ registerOp overflow f op ch =
                                 (0xF, if setOverflow result vx vy then 1 else 0)]
           Nothing -> [(secondNibble op, result)]
   in ch { registers = registers ch V.// registerValues }
+
+setBCD :: ExecuteOperation
+setBCD op ch = let vx = registers ch V.! secondNibble op
+                   digit n = (vx `div` (10 ^ n)) `mod` 10
+               in ch { memory = memory ch V.// map (\v -> (index ch + v, digit (2 - v))) [0..2] }
 
 displayOp :: ExecuteOperation
 displayOp op ch = ch { display = updatedDisplay
