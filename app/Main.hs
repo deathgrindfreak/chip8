@@ -6,7 +6,7 @@ import Chip8
 import Foreign.C.Types (CInt)
 import SDL
 import Linear (V4(..))
-import Control.Monad (unless)
+import Control.Monad (unless, guard)
 import Control.Monad.IO.Class (MonadIO)
 import qualified Data.Vector.Storable as V
 import Data.StateVar
@@ -78,26 +78,32 @@ appLoop :: Renderer -> IORef Chip -> IO ()
 appLoop renderer chip = do
   t <- ticks
   events <- pollEvents
-  let chipKeys = filterChipKeys events
 
-  runChipCycle renderer chip (ChipExtData { keys = chipKeys, millis = fromIntegral t })
+  unless (any isExitCode events) $ do
+    let extData = ChipExtData { keys = filterChipKeys events
+                              , millis = fromIntegral t }
+    runChipCycle renderer chip extData
 
-  present renderer
-  appLoop renderer chip
+    present renderer
+    appLoop renderer chip
+
+isExitCode :: Event -> Bool
+isExitCode event = maybe False (== ScancodeEscape) (getScanCode event)
 
 filterChipKeys :: [Event] -> [Int]
 filterChipKeys = foldr findChipKey []
   where
-    getScanCode event =
-      case eventPayload event of
-        KeyboardEvent keyboardEvent ->
-          if keyboardEventKeyMotion keyboardEvent == Pressed
-          then Just $ keysymScancode (keyboardEventKeysym keyboardEvent)
-          else Nothing
-        _ -> Nothing
-
     findChipKey event ks =
       maybe ks (:ks) (getScanCode event >>= (`L.elemIndex` scanCodes))
+
+getScanCode :: Event -> Maybe Scancode
+getScanCode event =
+  case eventPayload event of
+    KeyboardEvent keyboardEvent ->
+      if keyboardEventKeyMotion keyboardEvent == Pressed
+      then Just $ keysymScancode (keyboardEventKeysym keyboardEvent)
+      else Nothing
+    _ -> Nothing
 
 runChipCycle :: (MonadIO m) => Renderer -> IORef Chip -> ChipExtData -> m ()
 runChipCycle renderer chip extData = do
