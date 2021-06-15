@@ -88,7 +88,7 @@ appLoop renderer chip = do
     appLoop renderer chip
 
 isExitCode :: Event -> Bool
-isExitCode event = maybe False (== ScancodeEscape) (getScanCode event)
+isExitCode event = Just ScancodeEscape == getScanCode event
 
 filterChipKeys :: [Event] -> [Int]
 filterChipKeys = foldr findChipKey []
@@ -111,8 +111,9 @@ runChipCycle renderer chip extData = do
 
   Chip { display = ChipDisplay on off } <- get chip
 
-  rendererDrawColor renderer $= V4 0 0 0 0
-  drawPixels renderer off
+  unless (V.null off) $ do
+    rendererDrawColor renderer $= V4 0 0 0 0
+    clear renderer
 
   rendererDrawColor renderer $= V4 255 255 255 255
   drawPixels renderer on
