@@ -192,8 +192,8 @@ execute ChipExtData { keys = ks } op ch =
                       in ch { gen = g'
                             , registers = registers ch V.// [(secondNibble op, secondByte op .&. n)]}
     (0xD, _, _, _) -> displayOp op ch
-    (0xE, _, 0x9, 0xE) -> ch { pc = pc ch + if secondNibble op `elem` ks then 2 else 0 }
-    (0xE, _, 0xA, 0x1) -> ch { pc = pc ch + if secondNibble op `notElem` ks then 2 else 0 }
+    (0xE, _, 0x9, 0xE) -> ch { pc = pc ch + if (registers ch V.! secondNibble op) `elem` ks then 2 else 0 }
+    (0xE, _, 0xA, 0x1) -> ch { pc = pc ch + if (registers ch V.! secondNibble op) `notElem` ks then 2 else 0 }
     (0xF, _, 0x0, 0x7) -> ch { registers = registers ch V.// [(secondNibble op, delay ch)] }
     (0xF, _, 0x0, 0xA) -> waitForKeyPress ks op ch
     (0xF, _, 0x1, 0x5) -> ch { delay = registers ch V.! secondNibble op }
